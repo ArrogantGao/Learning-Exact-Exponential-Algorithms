@@ -2,7 +2,7 @@
 # Reference: Exaxt Exponential Algorithms, chapter-2.2
 
 using GenericTensorNetworks, GenericTensorNetworks.TropicalNumbers
-using Random, Test
+using Random, Test, Combinatorics
 
 GenericTensorNetworks._pow(x::TropicalAndOr, y::Int) = y == 1 ? x : zero(x)
 
@@ -14,7 +14,9 @@ function random_k_sat(n, m, k)
         while length(clause) < k
             var_id = rand(1:n)
             var = rand(1:2) == 1 ? vars[var_id] : ¬vars[var_id]
-            push!(clause, var)
+            if !(var in clause) && !(¬var in clause)
+                push!(clause, var)
+            end
         end
         push!(clauses, foldl(∨, clause))
     end
@@ -28,6 +30,17 @@ end
 function solver_gtn(cnf)
     gp = GenericTensorNetwork(Satisfiability(cnf))
     return GenericTensorNetworks.contractx(gp, TropicalAndOr(true); usecuda=false)
+end
+
+function ksat_naive(vec_cnf)
+    vars = BoolVar.(unique([var.name for clause in vec_cnf for var in clause]))
+    for truth_true in [] ∪ combinations(vars)
+        truth = [truth_true..., [¬var for var in vars if var ∉ truth_true]...]
+        if satisify(vec_cnf, truth)
+            return true, truth
+        end
+    end
+    return false, nothing
 end
 
 function reduced_clause(caluse, true_vars)
@@ -46,12 +59,11 @@ end
 
 function ksat1(vec_cnf, truth=Vector{BoolVar}())
     if isempty(vec_cnf)
-        return TropicalAndOr(true), truth
+        return true, truth
     elseif !isempty(findall(x -> isempty(x), vec_cnf))
-        return TropicalAndOr(false), nothing
+        return false, nothing
     end
 
-    results = Vector{TropicalAndOr}()
     for i in 1:length(vec_cnf[1])
         true_vars = [vec_cnf[1][i], [¬vec_cnf[1][j] for j in 1:i - 1]...]
         new_cnf = typeof(vec_cnf)()
@@ -64,15 +76,16 @@ function ksat1(vec_cnf, truth=Vector{BoolVar}())
             end
         end
         tof, new_truth = ksat1(new_cnf, [truth..., true_vars...])
-        if tof == TropicalAndOr(true)
+        if tof == true
             return tof, new_truth
         end
     end
-    return TropicalAndOr(false), nothing
+    return false, nothing
 end
 
-function satisify(cnf, truth)
-    if all([any([var in truth for var in clause]) for clause in cnf])
+function satisify(vec_cnf, truth)
+    @assert unique([i.name for i in truth]) == [i.name for i in truth]
+    if all([any([var in truth for var in clause]) for clause in vec_cnf])
         return true
     else
         return false
@@ -85,8 +98,13 @@ function main()
             cnf = random_k_sat(n, m, k)
             vec_cnf = cnf2vec(cnf)
             tof, truth = ksat1(vec_cnf)
-            if tof == TropicalAndOr(true)
+            naive_tof, naive_truth = ksat_naive(vec_cnf)
+            @test naive_tof == tof
+            if tof == true
                 @test satisify(vec_cnf, truth)
+            end
+            if naive_tof == true
+                @test satisify(vec_cnf, naive_truth)
             end
         end
     end
